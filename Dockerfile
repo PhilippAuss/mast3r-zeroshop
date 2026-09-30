@@ -2,12 +2,13 @@ FROM nvcr.io/nvidia/pytorch:24.01-py3
 
 LABEL description="Docker container for MASt3R with dependencies installed. CUDA VERSION"
 ENV DEVICE="cuda"
+ENV PIP_NO_CACHE_DIR=1
+ENV MAX_JOBS=4
 ENV MODEL="MASt3R_ViTLarge_BaseDecoder_512_dpt.pth"
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    git=1:2.34.1-1ubuntu1.10 \
-    libglib2.0-0=2.72.4-0ubuntu2.2 \
+    git \
     wget \
     libgl1 \
     libglib2.0-0 \
@@ -45,6 +46,10 @@ WORKDIR /home/appuser/mast3r/
 # Create mast3r environment with Python 3.11 and cmake
 RUN conda create -n mast3r python=3.11 cmake=3.14.0 -y
 
+# Ignore the obsolete pip index configured by the NVIDIA base image.
+ENV PIP_CONFIG_FILE=/dev/null
+ENV PIP_EXTRA_INDEX_URL=""
+
 # Install PyTorch with CUDA 12.1 support via pip (avoids Intel MKL symbol issues)
 RUN bash -c "source activate mast3r && \
     pip install 'numpy<2.0' && \
@@ -53,11 +58,17 @@ RUN bash -c "source activate mast3r && \
     pip install -r dust3r/requirements.txt && \
     pip install -r dust3r/requirements_optional.txt && \
     pip install 'opencv-python<4.10' --force-reinstall && \
-    conda install -c conda-forge faiss-gpu -y && \
-    pip install asmk && \
+    conda install --override-channels -c pytorch -c nvidia -c defaults pytorch::faiss-gpu=1.8.0 numpy=1.26.4 -y && \
+    pip install pyaml && pip install --no-deps asmk && \
     pip install 'scipy<1.14' --force-reinstall && \
-    pip install 'numpy<2.0' --force-reinstall"
+    pip uninstall -y sparsediffpy && pip install 'cvxpy<1.7' && \
+    pip uninstall -y numpy && \
+    rm -rf /opt/conda/envs/mast3r/lib/python3.11/site-packages/numpy /opt/conda/envs/mast3r/lib/python3.11/site-packages/numpy.libs && \
+    pip install numpy==1.26.4 && conda clean -afy"
 
+
+# Verify that Conda/pip did not leave a mixed NumPy installation.
+RUN conda run -n mast3r python -c "import numpy, scipy.interpolate, cvxpy, faiss; assert numpy.__version__ == '1.26.4'; assert hasattr(faiss, 'StandardGpuResources')"
 
 # Make mast3r environment activate by default
 RUN echo "conda activate mast3r" >> ~/.bashrc
